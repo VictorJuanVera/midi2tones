@@ -3,10 +3,13 @@
 *
 *  MIDITONES: Convert a MIDI file into a simple bytestream of notes
 *
+*  Forked by Scott Allen to add an alternate tone frequency/duration output format
+*  September 2016.
 *
 *  MIDITONES converts a MIDI music file into a much simplified stream of commands, so that
 *  the music can easily be played on a small microcontroller-based synthesizer that has
-*  only simple tone generators. This is on github at www.github.com/LenShustek/miditones.
+*  only simple tone generators. This is on github at
+*  https://github.com/LenShustek/miditones
 *
 *  Volume ("velocity") and instrument information in the MIDI file can either be
 *  discarded or kept. All the tracks are processed and merged into a single time-ordered
@@ -19,6 +22,11 @@
 *    www.github.com/LenShustek/Playtune_poll
 *    www.github.com/LenShustek/Playtune_samp
 *  MIDITONES may also prove useful for other simple music synthesizers..
+*
+*  An alternate output format can be specified, which consists of a single monotonic
+*  stream of frequency/duration pairs of 16 bit values. This format is suitable for use
+*  with the ArduboyTones library, which is on GitHub at
+*  https://github.com/Arduboy/ArduboyTones
 *
 *  The output can be either a C-language source code fragment that initializes an
 *  array with the command bytestream, or a binary file with the bytestream itself.
@@ -60,7 +68,13 @@
 *
 *  The following commonly-used command-line options can be specified:
 *
+*  -a   Output the alternate frequency/duration pair format
+*
 *  -v   Add velocity (volume) information to the output bytestream
+*
+*  -vn  For the alternate format, "n" specifies the minimum velocity value that will
+*       produce a high volume tone. Without this option all tones will be
+*       normal volume.
 *
 *  -i   Add instrument change commands to the output bytestream
 *
@@ -104,6 +118,9 @@
 *  -cn  Only process the channel numbers whose bits are on in the number "n".
 *       For example, -c3 means "only process channels 0 and 1". In addition to decimal,
 *       "n" can be also specified in hex using a 0x prefix or octal with a 0 prefix.
+*       For the alternate output format, only the lowest bit will be used to specify
+*       the single channel to be processed, and without this option channel 0 will
+*       be used.
 *
 *  -kn  Change the musical key of the output by n chromatic notes.
 *       -k-12 goes one octave down, -k12 goes one octave up, etc.
@@ -111,6 +128,13 @@
 *  -pi  Ignore notes in the MIDI percussion track 9 (also called 10 by some)
 *
 *  -dp  Generate IDE-dependent C code to define PROGMEM
+*
+*  -fx  For the alternate output format, instead of using defined note names,
+*       output actual frequency values in decimal format depending on "x":
+*       -fa: For high volume notes use format "<freq>+TONE_HIGH_VOLUME"
+*       -fb: For high volume notes just add 0x8000 to the frequency value
+*
+*  -r   Terminate the output file with a "restart" command instead of a "stop" command.
 *
 *  -h   Give command-line help.
 *
@@ -136,8 +160,8 @@
 *
 *    F0     End of score; stop playing.
 *
-*    E0     End of score; start playing again from the beginning.
-*           (Shown for completeness; MIDITONES won't generate this.)
+*    E0     End of score; start playing again from the beginning. Will be generated if
+*           the -r option was given.
 *
 *  If the high-order bit of the byte is 0, it is a command to delay for a while until
 *  the next note change.  The other 7 bits and the 8 bits of the following byte are
@@ -167,6 +191,37 @@
 *     and should be ignored by players.
 *
 *  Len Shustek, 4 Feb 2011 and later
+*
+*  *****  The alternate frequency/duration pair output format  *****
+*
+*  The generated stream is a series of frequency/duration value pairs. The frequency
+*  is in Hz and the duration is in milliseconds. Each value is 16 bits. For a binary
+*  file the values are stored high byte first. The ArduboyTones player supports
+*  frequencies from 16 Hz to 32767 Hz but MIDITONES converts MIDI note numbers in the
+*  range from note 12 (16.352 Hz rounded to 16 Hz) to note 127 (12543.9 Hz rounded
+*  to 12544 Hz).
+*
+*  Periods of silence are represented by a frequency/duration pair with a frequency
+*  value of 0.
+*
+*  Since the output is monotonic, only one MIDI channel is processed. The lowest bit
+*  set in the -cn option's mask will indicate the channel to be used. If the -cn option
+*  isn't given, channel 0 will be used.
+*
+*  Tones can be specified to play at either normal or high volume. High volume is
+*  indicated by setting the high bit of the frequency value (i.e. adding 0x8000 to the
+*  desired frequency). A note will be set to high volume if the -vn option is used and
+*  the MIDI velocity of the note is equal to or greater than the option value.
+*
+*  For the C output format, frequencies will be output as note names, as defined in the
+*  ArduboyTones library's ArduboyTonesPitches.h file. If the -f option is given,
+*  the actual frequency, in decimal, will be used instead. Durations will be output
+*  in decimal.
+*
+*  Output files are terminated with a single 16 bit value of 0x8000 to indicate
+*  end of score - stop playing. A file can instead be terminated with 0x8001 to indicate
+*  end of score - start playing again from the beginning, which is specified using the
+*  -r option.
 *
 *----------------------------------------------------------------------------------------
 * The MIT License (MIT)
@@ -248,8 +303,12 @@
 *     - Fix handling of the -nx option to count more accurately
 *     - Give a proper error message for missing base name
 *     - Include the header and terminator in the score byte count
+* 27 September 2016, Scott Allen, V2.00
+*     -Add alternate frequency/duration pair output format and options to support it
+*     -Add -r option to terminate output with "restart" instead of "stop"
+*     -Allow hex and octal entry, in addition to decimal, for -cn option
 */
-#define VERSION "1.12"
+#define VERSION "2.00"
 
 /*--------------------------------------------------------------------------------------------
 
@@ -353,8 +412,14 @@ struct track_header {
 #define MAX_TRACKS 24           /* max number of MIDI tracks we will process */
 #define PERCUSSION_TRACK 9      /* the track MIDI uses for percussion sounds */
 
+                                /* for alternate output format: */
+#define TONE_HIGH_VOLUME 0x8000 /* add to frequency for high volume */
+#define TONES_END 0x8000        /* end marker for stop playing */
+#define TONES_REPEAT 0x8001     /* end marker for restart playing */
+
 bool loggen, logparse, parseonly, strategy1, strategy2, binaryoutput, define_progmem,
-   velocityoutput, instrumentoutput, percussion_ignore, percussion_translate, do_header;
+   velocityoutput, instrumentoutput, percussion_ignore, percussion_translate, do_header,
+   alt_out, restart, freq_style_a, freq_style_b, option_n;
 FILE *infile, *outfile, *logfile;
 uint8_t *buffer, *hdrptr;
 unsigned long buflen;
@@ -372,6 +437,10 @@ long int outfile_bytecount = 0;
 unsigned int ticks_per_beat = 240;
 unsigned long timenow = 0;
 unsigned long tempo;            /* current tempo in usec/qnote */
+int velocity_threshold = 128;   /* alt out format: minimum velocity for high volume */
+int pending_note;               /* alt out format: note number awaiting output */
+int pending_velocity;           /* alt out format: velocity of note awaiting output */
+int alt_out_channel;            /* alt out format: MIDI channel used */
 
 struct tonegen_status {         /* current status of a tone generator */
    bool playing;                /* is it playing? */
@@ -435,11 +504,30 @@ struct file_hdr_t {             /* what the optional file header looks like */
 
 long int file_header_num_tgens_position;
 
+const char note_name[][3] = {
+    "C", "CS",  "D", "DS",  "E",  "F", "FS",  "G", "GS",  "A", "AS",  "B" };
+
+/* MIDI note frequencies (notes below number 12 not supported) */
+const uint16_t note_freq[] = {
+      0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0, /*   0 -  11 */
+     16,   17,   18,   19,   21,   22,   23,   25,   26,   28,   29,   31, /*  12 -  23 */
+     33,   35,   37,   39,   41,   44,   46,   49,   52,   55,   58,   62, /*  24 -  35 */
+     65,   69,   73,   78,   82,   87,   93,   98,  104,  110,  117,  123, /*  36 -  47 */
+    131,  139,  147,  156,  165,  175,  185,  196,  208,  220,  233,  247, /*  48 -  59 */
+    262,  277,  294,  311,  330,  349,  370,  392,  415,  440,  466,  494, /*  60 -  71 */
+    523,  554,  587,  622,  659,  698,  740,  784,  831,  880,  932,  988, /*  72 -  83 */
+   1047, 1109, 1175, 1245, 1319, 1397, 1480, 1568, 1661, 1760, 1865, 1976, /*  84 -  95 */
+   2093, 2218, 2349, 2489, 2637, 2794, 2960, 3136, 3322, 3520, 3729, 3951, /*  96 - 107 */
+   4186, 4435, 4699, 4978, 5274, 5588, 5920, 6272, 6645, 7040, 7459, 7902, /* 108 - 119 */
+   8372, 8870, 9397, 9956,10548,11175,11840,12544                          /* 120 - 127 */
+};
+
 /**************  command-line processing  *******************/
 
 void SayUsage (char *programName) {
    static char *usage[] = {
       "Convert MIDI files to an Arduino PLAYTUNE bytestream",
+      "or a frequency/duration pairs stream suitable for ArduboyTones",
       "",
       "Use:  miditones <options> <basefilename>",
       "   input file will be <basefilename>.mid",
@@ -448,11 +536,13 @@ void SayUsage (char *programName) {
       "",
       "Commonly-used options:",
       "  -v   include velocity data",
+      "  -vn  for alternate format: n is the minimum velocity for high volume notes",
       "  -i   include instrument change commands",
       "  -pt  translate notes in the percussion track to notes 129 to 255",
       "  -d   include a self-describing file header",
       "  -b   generate binary file output instead of C source text",
       "  -tn  use at most n tone generators (default is 6, max is 16)",
+      "  -a   generate the alternate frequency/duration pair output format",
       "",
       "  The best options for later Playtune music players are: -v -i -pt -d",
       "",
@@ -466,6 +556,9 @@ void SayUsage (char *programName) {
       "  -cn  mask for which tracks to process, e.g. -c3 for only 0 and 1",
       "  -kn  key shift in chromatic notes, positive or negative",
       "  -pi  ignore notes in the percussion track (9)",
+      "  -fa  for alternate format: high volume notes as \"<freq>+TONE_HIGH_VOLUME\"",
+      "  -fb  for alternate format: high volume notes as a single decimal value",
+      "  -r   terminate output file with \"restart\" instead of \"stop\" command",
       "  -dp  define PROGMEM in output C code",
       NULL
    };
@@ -489,6 +582,12 @@ does not start with a dash or a slash*/
          case '?':
             SayUsage (argv[0]);
             exit (1);
+         case 'A':
+            alt_out = true;
+            if (argv[i][2] != '\0')
+               goto opterror;
+            printf ("Generating frequency/duration pair output format.\n");
+            break;
          case 'L':
             if (toupper (argv[i][2]) == 'G')
                loggen = true;
@@ -520,7 +619,13 @@ does not start with a dash or a slash*/
             break;
          case 'V':
             velocityoutput = true;
-            if (argv[i][2] != '\0')
+            if (argv[i][2] == '\0')
+               break;
+            if (sscanf (&argv[i][2], "%d%n", &velocity_threshold, &nch) != 1
+                || velocity_threshold < 0 || velocity_threshold > 127)
+               goto opterror;
+            printf ("Using velocity >= %d for high volume.\n", velocity_threshold);
+            if (argv[i][2 + nch] != '\0')
                goto opterror;
             break;
          case 'I':
@@ -551,6 +656,7 @@ does not start with a dash or a slash*/
                goto opterror;
             if (argv[i][2 + nch] != '\0')
                goto opterror;
+            option_n = true;
             break;
          case 'C':
             if (sscanf (&argv[i][2], "%i%n", &channel_mask, &nch) != 1
@@ -578,6 +684,21 @@ does not start with a dash or a slash*/
             else
                goto opterror;
             if (argv[i][3] != '\0')
+               goto opterror;
+            break;
+         case 'F':
+            if (toupper (argv[i][2]) == 'A')
+               freq_style_a = true;
+            else if (toupper (argv[i][2]) == 'B')
+               freq_style_b = true;
+            else
+               goto opterror;
+            if (argv[i][3] != '\0')
+               goto opterror;
+            break;
+         case 'R':
+            restart = true;
+            if (argv[i][2] != '\0')
                goto opterror;
             break;
             /* add more  option switches here */
@@ -704,11 +825,21 @@ uint32_t rev_long (uint32_t val) {
            (rev_short ((uint16_t) (val >> 16)) & 0xffff));
 }
 
+/* write a big-endian 16 bit number to the output file */
+void output_word (uint16_t val) {
+   putc ((unsigned char) (val >> 8), outfile);
+   putc ((unsigned char) (val & 0xff), outfile);
+   outfile_bytecount += 2;
+}
+
 /* account for new items in the non-binary output file
 and generate a newline every so often. */
 
 void outfile_items (int n) {
-   outfile_bytecount += n;
+   if (!alt_out)
+      outfile_bytecount += n;
+   else
+      outfile_bytecount += (n * 2);
    outfile_itemcount += n;
    if (!binaryoutput && outfile_itemcount >= outfile_maxitems) {
       fprintf (outfile, "\n");
@@ -1003,8 +1134,10 @@ int main (int argc, char *argv[]) {
    int earliest_tracknum;
    unsigned long earliest_time;
    int notes_skipped = 0;
+   char *text;
 
    printf ("MIDITONES V%s, (C) 2011-2016 Len Shustek\n", VERSION);
+   printf ("Frequency/duration pair output format by Scott Allen\n\n");
    if (argc == 1) {             /* no arguments */
       SayUsage (argv[0]);
       return 1;
@@ -1019,6 +1152,27 @@ int main (int argc, char *argv[]) {
       exit (4);
    }
    filebasename = argv[argno];
+
+/* if alternate output format, overide options with required values */
+   if (alt_out) {
+      num_tonegens = 1;
+      do_header = false;
+      instrumentoutput = false;
+      percussion_translate = false;
+      velocityoutput = true;
+      if (!option_n)
+         outfile_maxitems = 16;
+
+      /* use only lowest channel from mask */
+      for (int i = 0; i < 16; i++) {
+         if (channel_mask >> i & 1) {
+            channel_mask = 1 << i;
+            alt_out_channel = i;
+            printf ("Using only MIDI channel %d\n", i);
+            break;
+         }
+      }
+   }
 
 /* Open the log file */
 
@@ -1078,14 +1232,22 @@ int main (int argc, char *argv[]) {
          | (percussion_translate ? HDR_F1_PERCUSSION_PRESENT : 0);
       file_header.num_tgens = num_tonegens;
       if (!binaryoutput) {      /* create header of C file that initializes score data */
+         if (!alt_out)
+            text = "Playtune bytestream";
+         else
+            text = "ArduboyTones stream";
          time_t rawtime;
          time (&rawtime);
-         fprintf (outfile, "// Playtune bytestream for file \"%s.mid\" ", filebasename);
+         fprintf (outfile, "// %s for file \"%s.mid\" ", text, filebasename);
          fprintf (outfile, "created by MIDITONES V%s on %s", VERSION,
                   asctime (localtime (&rawtime)));
          print_command_line (argc, argv);
-         if (channel_mask != 0xffff)
-            fprintf (outfile, "//   Only the masked channels were processed: %04X\n", channel_mask);
+         if (!alt_out) {
+            if (channel_mask != 0xffff)
+               fprintf (outfile, "//   Only the masked channels were processed: %04X\n", channel_mask);
+         } else {
+            fprintf (outfile, "//   From channel %d\n", alt_out_channel);
+         }
          if (keyshift != 0)
             fprintf (outfile, "//   Keyshift was %d chromatic notes\n", keyshift);
          if (define_progmem) {
@@ -1095,7 +1257,10 @@ int main (int argc, char *argv[]) {
             fprintf (outfile, "#define PROGMEM\n");
             fprintf (outfile, "#endif\n");
          }
-         fprintf (outfile, "const unsigned char PROGMEM score [] = {\n");
+         if (!alt_out)
+            fprintf (outfile, "const unsigned char score[] PROGMEM = {\n");
+         else
+            fprintf (outfile, "const uint16_t score[] PROGMEM = {\n");
          if (do_header) {       // write the C initialization for the file header
             fprintf (outfile, "'P','t', 6, 0x%02X, 0x%02X, ", file_header.f1, file_header.f2);
             fflush (outfile);
@@ -1181,7 +1346,7 @@ This is not unlike multiway merging used for tape sorting algoritms in the 50's!
          if (earliest_time < timenow)
             midi_error ("INTERNAL: time went backwards", trk->trkptr);
 
-         /* If time has advanced, output a "delay" command */
+         /* If time has advanced, output a "delay" command  or frequency/duration pair */
 
          delta_time = earliest_time - timenow;
          if (delta_time) {
@@ -1191,16 +1356,50 @@ This is not unlike multiway merging used for tape sorting algoritms in the 50's!
             delta_msec = temp / 1000;   // get around LCC compiler bug
             if (loggen)
                fprintf (logfile, "->Delay %ld msec (%ld ticks)\n", delta_msec, delta_time);
-            if (delta_msec > 0x7fff)
-               midi_error ("INTERNAL: time delta too big", trk->trkptr);
-            /* output a 15-bit delay in big-endian format */
-            if (binaryoutput) {
-               putc ((unsigned char) (delta_msec >> 8), outfile);
-               putc ((unsigned char) (delta_msec & 0xff), outfile);
-               outfile_bytecount += 2;
+            if (!alt_out) {
+               if (delta_msec > 0x7fff)
+                  midi_error ("INTERNAL: time delta too big", trk->trkptr);
+               /* output a 15-bit delay in big-endian format */
+               if (binaryoutput) {
+                  output_word (delta_msec);
+               } else {
+                  fprintf (outfile, " %ld,%ld,", delta_msec >> 8, delta_msec & 0xff);
+                  outfile_items (2);
+               }
             } else {
-               fprintf (outfile, "%ld,%ld, ", delta_msec >> 8, delta_msec & 0xff);
-               outfile_items (2);
+               uint16_t freq;
+               bool high_vol;
+               if (delta_msec > 0xffff)
+                  midi_error ("INTERNAL: time delta too big", trk->trkptr);
+               /* output a frequency/duration pair */
+               freq = note_freq[pending_note];
+               high_vol = (pending_velocity >= velocity_threshold) && (freq != 0);
+               if (binaryoutput) {
+                  if (high_vol)
+                     freq += TONE_HIGH_VOLUME;
+                  output_word (freq);
+                  output_word (delta_msec);
+               } else {
+                  if (freq_style_a) {
+                     fprintf (outfile, " %d", freq);
+                     if (high_vol)
+                        fprintf (outfile, "+TONE_HIGH_VOLUME");
+                  } else if (freq_style_b) {
+                     if (high_vol)
+                        freq += TONE_HIGH_VOLUME;
+                     fprintf (outfile, " %d", freq);
+                  } else {
+                     if (freq != 0) {
+                        fprintf (outfile, " NOTE_%s%d", note_name[pending_note % 12], pending_note / 12);
+                        if (high_vol)
+                           putc ('H', outfile);
+                     } else {
+                        fprintf (outfile, " NOTE_REST");
+                     }
+                  }
+                  fprintf (outfile, ",%ld,", delta_msec);
+                  outfile_items (2);
+               }
             }
          }
          timenow = earliest_time;
@@ -1229,12 +1428,16 @@ This is not unlike multiway merging used for tape sorting algoritms in the 50's!
                            fprintf (logfile,
                                     "->Stop note %d, generator %d, track %d\n",
                                     tg->note, tgnum, tracknum);
-                        if (binaryoutput) {
-                           putc (CMD_STOPNOTE | tgnum, outfile);
-                           outfile_bytecount += 1;
+                        if (!alt_out) {
+                           if (binaryoutput) {
+                              putc (CMD_STOPNOTE | tgnum, outfile);
+                              outfile_bytecount += 1;
+                           } else {
+                              fprintf (outfile, " 0x%02X,", CMD_STOPNOTE | tgnum);
+                              outfile_items (1);
+                           }
                         } else {
-                           fprintf (outfile, "0x%02X, ", CMD_STOPNOTE | tgnum);
-                           outfile_items (1);
+                           pending_note = pending_velocity = 0;
                         }
                         tg->playing = false;
                         trk->tonegens[tgnum] = false;
@@ -1297,40 +1500,49 @@ This is not unlike multiway merging used for tape sorting algoritms in the 50's!
                            putc (CMD_INSTRUMENT | tgnum, outfile);
                            putc (tg->instrument, outfile);
                         } else {
-                           fprintf (outfile, "0x%02X,%d, ", CMD_INSTRUMENT | tgnum, tg->instrument);
+                           fprintf (outfile, " 0x%02X,%d,", CMD_INSTRUMENT | tgnum, tg->instrument);
                            outfile_items (2);
                         }
                      }
                   }
                   if (loggen)
                      fprintf (logfile,
-                              "->Start note %d, generator %d, instrument %d, track %d\n",
-                              trk->note, tgnum, tg->instrument, tracknum);
+                              "->Start note %d, velocity %d, generator %d, instrument %d, track %d\n",
+                              trk->note, trk->velocity, tgnum, tg->instrument, tracknum);
                   if (percussion_translate && trk->chan == PERCUSSION_TRACK) {  /* if requested, */
                      shifted_note = trk->note + 128;    // shift percussion notes up to 128..255
                   } else {      /* shift notes as requested */
                      shifted_note = trk->note + keyshift;
+                  }
+                  if (!alt_out) {
                      if (shifted_note < 0)
                         shifted_note = 0;
                      if (shifted_note > 127)
                         shifted_note = 127;
-                  }
-                  if (binaryoutput) {
-                     putc (CMD_PLAYNOTE | tgnum, outfile);
-                     putc (shifted_note, outfile);
-                     outfile_bytecount += 2;
-                     if (velocityoutput) {
-                        putc (trk->velocity, outfile);
-                        outfile_bytecount++;
+                     if (binaryoutput) {
+                        putc (CMD_PLAYNOTE | tgnum, outfile);
+                        putc (shifted_note, outfile);
+                        outfile_bytecount += 2;
+                        if (velocityoutput) {
+                           putc (trk->velocity, outfile);
+                           outfile_bytecount++;
+                        }
+                     } else {
+                        if (!velocityoutput) {
+                           fprintf (outfile, " 0x%02X,%d,", CMD_PLAYNOTE | tgnum, shifted_note);
+                           outfile_items (2);
+                        } else {
+                           fprintf (outfile, " 0x%02X,%d,%d,",
+                                    CMD_PLAYNOTE | tgnum, shifted_note, trk->velocity);
+                           outfile_items (3);
+                        }
                      }
                   } else {
-                     if (velocityoutput == 0) {
-                        fprintf (outfile, "0x%02X,%d, ", CMD_PLAYNOTE | tgnum, shifted_note);
-                        outfile_items (2);
+                     if ((shifted_note < 12) || (shifted_note > 127)) {
+                        pending_note = pending_velocity = 0;
                      } else {
-                        fprintf (outfile, "0x%02X,%d,%d, ",
-                                 CMD_PLAYNOTE | tgnum, shifted_note, trk->velocity);
-                        outfile_items (3);
+                        pending_note = shifted_note;
+                        pending_velocity = trk->velocity;
                      }
                   }
                } else {
@@ -1348,28 +1560,48 @@ This is not unlike multiway merging used for tape sorting algoritms in the 50's!
       while (tracks_done < num_tracks);
 
       // generate the end-of-score command and some commentary
-      outfile_bytecount++;
-      if (binaryoutput)
-         putc (CMD_STOP, outfile);
-      else {
-         fprintf (outfile,
-                  "0x%02x};\n// This score contains %ld bytes, and %d tone generator%s used.\n",
-                  CMD_STOP, outfile_bytecount, num_tonegens_used,
-                  num_tonegens_used == 1 ? " is" : "s are");
+      if (binaryoutput) {
+         if (!alt_out) {
+            putc (restart ? CMD_RESTART : CMD_STOP, outfile);
+            outfile_bytecount++;
+         } else {
+            output_word (restart ? TONES_REPEAT : TONES_END);
+         }
+      } else {
+         if (outfile_itemcount != 0)
+            putc ('\n', outfile);
+         if (!alt_out) {
+            fprintf (outfile, " 0x%02x", restart ? CMD_RESTART : CMD_STOP);
+            outfile_bytecount++;
+         } else {
+            if (freq_style_b)
+               fprintf (outfile, " 0x%04x", restart ? TONES_REPEAT : TONES_END);
+            else
+               fprintf (outfile, " %s", restart ? "TONES_REPEAT" : "TONES_END");
+            outfile_bytecount += 2;
+         }
+         fprintf (outfile, "\n};\n// This score contains %ld bytes", outfile_bytecount);
+         if (!alt_out)
+            fprintf (outfile, ", and %d tone generator%s used.\n",num_tonegens_used,
+                     num_tonegens_used == 1 ? " is" : "s are");
+         else
+            fprintf (outfile, ".\n");
          if (notes_skipped)
             fprintf (outfile, "// %d notes had to be skipped.\n", notes_skipped);
       }
-      printf ("  %s %d tone generators were used.\n",
-              num_tonegens_used < num_tonegens ? "Only" : "All", num_tonegens_used);
+      if (!alt_out)
+         printf ("  %s %d tone generators were used.\n",
+                 num_tonegens_used < num_tonegens ? "Only" : "All", num_tonegens_used);
       if (notes_skipped)
-         printf
-            ("  %d notes were skipped because there weren't enough tone generators.\n",
-             notes_skipped);
+         printf ("  %d notes were skipped because there %s.\n", notes_skipped,
+                 alt_out ? "is only 1 tone generator"
+                         : "weren't enough tone generators");
       printf ("  %ld bytes of score data were generated.\n", outfile_bytecount);
       if (loggen)
          fprintf (logfile, "%d note-on commands, %d instrument changes.\n",
                   note_on_commands, instrument_changes);
-      if (do_header) {             // rewrite the file header with the actual number of tone generators used
+
+      if (do_header) {  // rewrite the file header with the actual number of tone generators used
          if (fseek (outfile, file_header_num_tgens_position, SEEK_SET) != 0)
             fprintf (stderr, "Can't seek to number of tone generators in the header\n");
          else {

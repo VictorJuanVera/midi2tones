@@ -102,7 +102,8 @@
 *          2:try to keep each track to its own tone generator
 *
 *  -cn  Only process the channel numbers whose bits are on in the number "n".
-*       For example, -c3 means "only process channels 0 and 1"
+*       For example, -c3 means "only process channels 0 and 1". In addition to decimal,
+*       "n" can be also specified in hex using a 0x prefix or octal with a 0 prefix.
 *
 *  -kn  Change the musical key of the output by n chromatic notes.
 *       -k-12 goes one octave down, -k12 goes one octave up, etc.
@@ -235,7 +236,7 @@
 *     -Document a summary of the MIDI file format so I don't have to keep looking it up.
 *     -Add -pi and -pt options to ignore or translate the MIDI percussion track 9.
 *     -Remove string.h for more portability; add strlength().
-*     -Add -i option for recording instrument types.in the bytestream.
+*     -Add -i option for recording instrument types in the bytestream.
 *     -Add -d option for generating a file description header.
 *     -Add -dp option to make generating the PROGMEM definition optional
 *     -Add -n option to specify number of items per output line
@@ -552,7 +553,8 @@ does not start with a dash or a slash*/
                goto opterror;
             break;
          case 'C':
-            if (sscanf (&argv[i][2], "%d%n", &channel_mask, &nch) != 1 || channel_mask > 0xffff)
+            if (sscanf (&argv[i][2], "%i%n", &channel_mask, &nch) != 1
+                || channel_mask == 0 || channel_mask > 0xffff)
                goto opterror;
             printf ("Channel (track) mask is %04X.\n", channel_mask);
             if (argv[i][2 + nch] != '\0')

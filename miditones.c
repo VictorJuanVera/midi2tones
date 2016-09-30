@@ -68,7 +68,10 @@
 *
 *  The following commonly-used command-line options can be specified:
 *
-*  -a   Output the alternate frequency/duration pair format
+*  -on  Generate output format "n".
+*       Two formats are available:
+*          1: The Playtune format (which is the default if this option isn't given).
+*          2: The frequency/duration pair format, as used by ArduboyTones.
 *
 *  -v   Add velocity (volume) information to the output bytestream
 *
@@ -112,8 +115,8 @@
 *
 *  -sn  Use bytestream generation strategy "n".
 *       Two strategies are currently implemented:
-*          1:favor track 1 notes instead of all tracks equally
-*          2:try to keep each track to its own tone generator
+*          1: Favor track 1 notes instead of all tracks equally
+*          2: Try to keep each track to its own tone generator
 *
 *  -cn  Only process the channel numbers whose bits are on in the number "n".
 *       For example, -c3 means "only process channels 0 and 1". In addition to decimal,
@@ -131,8 +134,8 @@
 *
 *  -fx  For the alternate output format, instead of using defined note names,
 *       output actual frequency values in decimal format depending on "x":
-*       -fa: For high volume notes use format "<freq>+TONE_HIGH_VOLUME"
-*       -fb: For high volume notes just add 0x8000 to the frequency value
+*          -fa: For high volume notes use format "<freq>+TONE_HIGH_VOLUME"
+*          -fb: For high volume notes just add 0x8000 to the frequency value
 *
 *  -r   Terminate the output file with a "restart" command instead of a "stop" command.
 *
@@ -535,6 +538,8 @@ void SayUsage (char *programName) {
       "   log file will be <basefilename>.log",
       "",
       "Commonly-used options:",
+      "  -o1  generate Playtune output format (the default)",
+      "  -o2  generate the frequency/duration pair output format",
       "  -v   include velocity data",
       "  -vn  for alternate format: n is the minimum velocity for high volume notes",
       "  -i   include instrument change commands",
@@ -542,7 +547,6 @@ void SayUsage (char *programName) {
       "  -d   include a self-describing file header",
       "  -b   generate binary file output instead of C source text",
       "  -tn  use at most n tone generators (default is 6, max is 16)",
-      "  -a   generate the alternate frequency/duration pair output format",
       "",
       "  The best options for later Playtune music players are: -v -i -pt -d",
       "",
@@ -582,11 +586,17 @@ does not start with a dash or a slash*/
          case '?':
             SayUsage (argv[0]);
             exit (1);
-         case 'A':
-            alt_out = true;
-            if (argv[i][2] != '\0')
+         case 'O':
+            if (argv[i][2] == '1')
+               alt_out = false;
+            else if (argv[i][2] == '2') {
+               alt_out = true;
+               printf ("Generating frequency/duration pair output format.\n");
+            }
+            else
                goto opterror;
-            printf ("Generating frequency/duration pair output format.\n");
+            if (argv[i][3] != '\0')
+               goto opterror;
             break;
          case 'L':
             if (toupper (argv[i][2]) == 'G')

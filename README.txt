@@ -157,9 +157,9 @@
 *  If the high-order bit of the byte is 1, then it is one of the following commands:
 *
 *    9t nn [vv]
-*           Start playing note nn on tone generator t.  Generators are numbered
-*           starting with 0. The note numbers are the MIDI numbers for the chromatic
-*           scale, with decimal 60 being Middle C, and decimal 69 being Middle A (440 Hz).
+*           Start playing note nn on tone generator t, replacing any previous note.  
+*           Generators are numbered starting with 0. The note numbers are the MIDI 
+*           numbers for the chromatic scale, with decimal 69 being Middle A (440 Hz).
 *           If the -v option was given, a second byte is added to indicate note volume.
 *
 *    8t     Stop playing the note on tone generator t.

@@ -1,4 +1,4 @@
-miditones: miditones.c
+miditones: midi2tones.c
 	gcc -O2 -Wall -o midi2tones midi2tones.c
 
 clean:
